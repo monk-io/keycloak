@@ -1,0 +1,116 @@
+namespace: keycloak
+
+base:
+  defines: runnable
+  metadata:
+    name: Keycloak Base Component
+    description: |
+      Reusable Keycloak identity and access management component. It runs the public
+      quay.io/keycloak/keycloak image and expects an inheriting template to provide a
+      Monk connection named postgres to a PostgreSQL-compatible service. Suitable
+      backing packages include self-hosted postgresql/db or a hosted Neon PostgreSQL
+      package. Sensitive admin and database credentials must be supplied by inheriting
+      templates, preferably with plain-name secret(...) references for production use.
+    tags: keycloak, identity, oidc, saml, component
+    website: https://www.keycloak.org/
+    source: https://github.com/keycloak/keycloak
+    publisher: monk.io
+    icon: https://www.keycloak.org/resources/images/keycloak_logo_200px.svg
+    private: false
+  variables:
+    keycloak-image-tag:
+      type: string
+      value: latest
+      description: Public quay.io/keycloak/keycloak image tag to run.
+    http-port:
+      type: int
+      value: 8080
+      description: Keycloak HTTP port inside the container.
+    management-port:
+      type: int
+      value: 9000
+      description: Keycloak management and health port inside the container.
+    hostname:
+      type: string
+      env: KC_HOSTNAME
+      value: http://localhost:8080
+      description: Public hostname or URL Keycloak uses when generating links.
+    hostname-strict:
+      type: string
+      env: KC_HOSTNAME_STRICT
+      value: "false"
+      description: Allows inheriting templates to use dynamic local or ingress hostnames.
+    proxy-headers:
+      type: string
+      env: KC_PROXY_HEADERS
+      value: xforwarded
+      description: Enables Keycloak to honor forwarded headers from a reverse proxy or ingress.
+    http-enabled:
+      type: string
+      env: KC_HTTP_ENABLED
+      value: "true"
+      description: Enables HTTP listener, expected to sit behind TLS-terminating ingress in production.
+    health-enabled:
+      type: string
+      env: KC_HEALTH_ENABLED
+      value: "true"
+      description: Enables Keycloak health endpoints for readiness checks.
+    metrics-enabled:
+      type: string
+      env: KC_METRICS_ENABLED
+      value: "true"
+      description: Enables Keycloak metrics and management endpoint integration.
+    db-vendor:
+      type: string
+      env: KC_DB
+      value: postgres
+      description: Database vendor used by Keycloak.
+    db-name:
+      type: string
+      value: keycloak
+      description: PostgreSQL database name used by Keycloak.
+    db-url:
+      type: string
+      env: KC_DB_URL
+      value: <- "jdbc:postgresql://" connection-hostname("postgres") split(".dns.podman") join("") ":" connection-port("postgres") "/" $db-name concat-all
+      description: JDBC URL built from the Monk postgres connection host, port, and database name.
+    db-user:
+      type: string
+      env: KC_DB_USERNAME
+      value: keycloak
+      description: PostgreSQL user used by Keycloak.
+    db-password:
+      type: string
+      env: KC_DB_PASSWORD
+      value: ""
+      description: Sensitive PostgreSQL password. Inheriting templates must set this from the connected database, a generated value, or secret("keycloak-db-password") using a plain secret name.
+    admin-user:
+      type: string
+      env: KC_BOOTSTRAP_ADMIN_USERNAME
+      value: admin
+      description: Initial Keycloak bootstrap admin username for a new realm database.
+    admin-password:
+      type: string
+      env: KC_BOOTSTRAP_ADMIN_PASSWORD
+      value: ""
+      description: Sensitive Keycloak bootstrap admin password. Inheriting templates must set this with a generated value or secret("keycloak-admin-password") using a plain secret name.
+  containers:
+    keycloak:
+      image: quay.io/keycloak/keycloak
+      image-tag: <- $keycloak-image-tag
+      restart: unless-stopped
+      bash: |
+        exec /opt/keycloak/bin/kc.sh start --http-enabled=true --hostname-strict=false --verbose
+  services:
+    http:
+      container: keycloak
+      port: <- $http-port
+      protocol: tcp
+      publish: false
+      description: Keycloak HTTP endpoint for login, admin console, and OIDC/SAML APIs.
+    management:
+      container: keycloak
+      port: <- $management-port
+      protocol: tcp
+      publish: false
+      description: Private Keycloak management endpoint used for readiness checks.

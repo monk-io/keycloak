@@ -1,0 +1,292 @@
+namespace: keycloak
+
+stack-postgres:
+  defines: runnable
+  metadata:
+    name: Keycloak Stack PostgreSQL
+    description: |
+      Production-intended private PostgreSQL service for the standalone Keycloak
+      stack. It reads its sensitive password from the stack-level secret-backed
+      variable and exposes no public ports.
+    tags: keycloak, postgresql, stack, production
+    website: https://www.postgresql.org/
+    source: https://github.com/postgres/postgres
+    publisher: monk.io
+    private: false
+  variables:
+    postgres-image-tag:
+      type: string
+      value: "17"
+      description: Public postgres Docker image tag used by the standalone stack.
+    db_user:
+      type: string
+      env: POSTGRES_USER
+      value: keycloak
+      description: PostgreSQL user created for the standalone Keycloak stack.
+    db_name:
+      type: string
+      env: POSTGRES_DB
+      value: keycloak
+      description: PostgreSQL database created for the standalone Keycloak stack.
+    db_pass:
+      type: string
+      env: POSTGRES_PASSWORD
+      value: <- $global-keycloak-db-password
+      description: Sensitive PostgreSQL password supplied by the standalone stack. Production deployments read secret("keycloak-db-password").
+    postgres-volume-name:
+      type: string
+      value: keycloak-stack-postgres
+      description: Monk volume subdirectory used for standalone PostgreSQL data.
+  containers:
+    postgres:
+      image: postgres
+      image-tag: <- $postgres-image-tag
+      restart: unless-stopped
+      paths:
+        - <- `${monk-volume-path}/${postgres-volume-name}:/var/lib/postgresql/data`
+  services:
+    postgres:
+      container: postgres
+      port: 5432
+      protocol: tcp
+      publish: false
+      description: Private PostgreSQL TCP endpoint consumed by standalone Keycloak.
+  checks:
+    readiness:
+      code: <- `exec("postgres", "pg_isready", "-U", "${db_user}") contains?("accepting connections")`
+      period: 5
+      initialDelay: 5
+      attempts: 30
+
+stack-app:
+  defines: runnable
+  inherits: keycloak/base
+  metadata:
+    name: Keycloak Standalone Service
+    description: |
+      Production-oriented Keycloak service for the standalone stack. It reads
+      sensitive credentials from stack-level secret-backed variables, connects to
+      private PostgreSQL, and exposes Keycloak only through Monk ingress.
+    tags: keycloak, identity, oidc, saml, stack, production
+    website: https://www.keycloak.org/
+    source: https://github.com/keycloak/keycloak
+    publisher: monk.io
+    icon: https://www.keycloak.org/resources/images/keycloak_logo_200px.svg
+    private: false
+  variables:
+    hostname:
+      type: string
+      env: KC_HOSTNAME
+      value: <- $keycloak-public-url
+      description: Public production URL used by Keycloak behind ingress.
+    db-name:
+      type: string
+      value: keycloak
+      description: PostgreSQL database name matching the standalone database service.
+    db-user:
+      type: string
+      env: KC_DB_USERNAME
+      value: keycloak
+      description: PostgreSQL user matching the standalone database service.
+    db-password:
+      type: string
+      env: KC_DB_PASSWORD
+      value: <- $global-keycloak-db-password
+      description: Sensitive PostgreSQL password shared with the standalone database. Production deployments read secret("keycloak-db-password").
+    admin-user:
+      type: string
+      env: KC_BOOTSTRAP_ADMIN_USERNAME
+      value: <- $keycloak-admin-user
+      description: Bootstrap admin username for a new standalone Keycloak database.
+    admin-password:
+      type: string
+      env: KC_BOOTSTRAP_ADMIN_PASSWORD
+      value: <- $global-keycloak-admin-password
+      description: Sensitive Keycloak bootstrap admin password. Production deployments read secret("keycloak-admin-password").
+  services:
+    http:
+      container: keycloak
+      port: <- $http-port
+      protocol: tcp
+      ingress-routes:
+        keycloak:
+          path-prefix: /
+      description: Production Keycloak HTTP endpoint intended for Monk ingress. Local Monk targets do not provide ingress.
+    management:
+      container: keycloak
+      port: <- $management-port
+      protocol: tcp
+      publish: false
+      description: Private Keycloak management endpoint for standalone readiness checks.
+  connections:
+    postgres:
+      target: keycloak/stack-postgres
+      service: postgres
+      description: Private PostgreSQL service connected to standalone Keycloak.
+  depends:
+    wait-for:
+      runnables:
+        - keycloak/stack-postgres
+      timeout: 180
+  checks:
+    readiness:
+      code: http-get-service("keycloak/stack-app", "management", "/health/ready") get-member("status") 200 equal?
+      period: 5
+      initialDelay: 20
+      attempts: 60
+
+stack:
+  defines: group
+  metadata:
+    name: Keycloak Standalone Stack
+    description: |
+      Secure production-intended standalone Keycloak stack with private PostgreSQL
+      and ingress-only Keycloak exposure. Sensitive values are read with secret(...)
+      using plain secret names, with generated per-deploy fallbacks for local proof
+      when those secrets are absent.
+    tags: keycloak, identity, postgresql, stack, production
+    website: https://www.keycloak.org/
+    source: https://github.com/keycloak/keycloak
+    publisher: monk.io
+    icon: https://www.keycloak.org/resources/images/keycloak_logo_200px.svg
+    private: false
+  members:
+    - keycloak/stack-postgres
+    - keycloak/stack-app
+  variables:
+    keycloak-public-url:
+      type: string
+      value: https://keycloak.example.com
+      description: Production URL expected at Monk ingress for Keycloak.
+    keycloak-admin-user:
+      type: string
+      value: admin
+      description: Bootstrap admin username for the standalone stack.
+    global-keycloak-db-password:
+      type: string
+      value: <- secret("keycloak-db-password") set-tmp("configured") random-uuid set-tmp("generated") $configured empty? then($generated) or($configured)
+      description: Sensitive PostgreSQL password shared by the standalone database and Keycloak. Set keycloak-db-password when inheriting for production.
+    global-keycloak-admin-password:
+      type: string
+      value: <- secret("keycloak-admin-password") set-tmp("configured") random-uuid set-tmp("generated") $configured empty? then($generated) or($configured)
+      description: Sensitive Keycloak bootstrap admin password. Set keycloak-admin-password when inheriting for production.
+  permitted-secrets:
+    keycloak-db-password: true
+    keycloak-admin-password: true
+
+stack-local-postgres:
+  defines: runnable
+  inherits: keycloak/stack-postgres
+  metadata:
+    name: Keycloak Local Stack PostgreSQL
+    description: Local verification PostgreSQL flavor for the standalone Keycloak stack. It uses a separate Monk volume and generated credentials.
+    tags: keycloak, postgresql, stack, local
+    website: https://www.postgresql.org/
+    source: https://github.com/postgres/postgres
+    publisher: monk.io
+    private: false
+  variables:
+    db_pass:
+      type: string
+      env: POSTGRES_PASSWORD
+      value: <- $global-keycloak-db-password
+      description: Sensitive generated PostgreSQL password shared with local Keycloak stack verification.
+    postgres-volume-name:
+      type: string
+      value: keycloak-stack-local-postgres
+      description: Monk volume subdirectory used for local stack PostgreSQL data.
+
+stack-local-app:
+  defines: runnable
+  inherits: keycloak/stack-app
+  metadata:
+    name: Keycloak Local Standalone Service
+    description: Local verification flavor of the standalone Keycloak service. It publishes a non-privileged host port for external HTTP checks.
+    tags: keycloak, identity, stack, local
+    website: https://www.keycloak.org/
+    source: https://github.com/keycloak/keycloak
+    publisher: monk.io
+    icon: https://www.keycloak.org/resources/images/keycloak_logo_200px.svg
+    private: false
+  variables:
+    hostname:
+      type: string
+      env: KC_HOSTNAME
+      value: http://localhost:18080
+      description: Local URL used by the standalone stack local flavor.
+    db-password:
+      type: string
+      env: KC_DB_PASSWORD
+      value: <- $global-keycloak-db-password
+      description: Sensitive generated PostgreSQL password shared with local stack PostgreSQL.
+    admin-password:
+      type: string
+      env: KC_BOOTSTRAP_ADMIN_PASSWORD
+      value: <- $global-keycloak-admin-password
+      description: Sensitive generated Keycloak bootstrap admin password used by local stack verification.
+    host-port:
+      type: int
+      value: 18080
+      description: Non-privileged host port published for local stack verification.
+  services:
+    http:
+      container: keycloak
+      port: <- $http-port
+      protocol: tcp
+      publish: true
+      host-port: <- $host-port
+      description: Published local Keycloak HTTP endpoint for standalone stack verification.
+    management:
+      container: keycloak
+      port: <- $management-port
+      protocol: tcp
+      publish: false
+      description: Private Keycloak management endpoint for local stack readiness checks.
+  connections:
+    postgres:
+      target: keycloak/stack-local-postgres
+      service: postgres
+      description: Private PostgreSQL service connected to local standalone Keycloak.
+  depends:
+    wait-for:
+      runnables:
+        - keycloak/stack-local-postgres
+      timeout: 180
+  checks:
+    readiness:
+      code: http-get-service("keycloak/stack-local-app", "management", "/health/ready") get-member("status") 200 equal?
+      period: 5
+      initialDelay: 20
+      attempts: 60
+
+stack-local:
+  defines: group
+  metadata:
+    name: Keycloak Standalone Stack Local
+    description: Local verification flavor of the standalone Keycloak stack with private PostgreSQL and a published non-privileged HTTP port.
+    tags: keycloak, identity, postgresql, stack, local
+    website: https://www.keycloak.org/
+    source: https://github.com/keycloak/keycloak
+    publisher: monk.io
+    icon: https://www.keycloak.org/resources/images/keycloak_logo_200px.svg
+    private: false
+  members:
+    - keycloak/stack-local-postgres
+    - keycloak/stack-local-app
+  variables:
+    keycloak-public-url:
+      type: string
+      value: http://localhost:18080
+      description: Local URL used by Keycloak for the local standalone stack flavor.
+    keycloak-admin-user:
+      type: string
+      value: admin
+      description: Bootstrap admin username for the local standalone stack flavor.
+    global-keycloak-db-password:
+      type: string
+      value: <- random-uuid
+      description: Sensitive generated PostgreSQL password used only by local stack verification.
+    global-keycloak-admin-password:
+      type: string
+      value: <- random-uuid
+      description: Sensitive generated Keycloak bootstrap admin password used only by local stack verification.

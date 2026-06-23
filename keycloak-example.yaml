@@ -1,0 +1,158 @@
+namespace: keycloak
+
+example-postgres:
+  defines: runnable
+  metadata:
+    name: Keycloak Example PostgreSQL
+    description: |
+      Concrete PostgreSQL backing service for the Keycloak component example. It is
+      intentionally separate from keycloak/base so the base remains reusable with
+      self-hosted postgresql/db or hosted Neon PostgreSQL packages.
+    tags: keycloak, postgresql, example, local
+    website: https://www.postgresql.org/
+    source: https://github.com/postgres/postgres
+    publisher: monk.io
+    private: false
+  variables:
+    postgres-image-tag:
+      type: string
+      value: "17"
+      description: Public postgres Docker image tag used by the component example.
+    db_user:
+      type: string
+      env: POSTGRES_USER
+      value: keycloak
+      description: PostgreSQL user created for the Keycloak example.
+    db_name:
+      type: string
+      env: POSTGRES_DB
+      value: keycloak
+      description: PostgreSQL database created for the Keycloak example.
+    db_pass:
+      type: string
+      env: POSTGRES_PASSWORD
+      value: <- $example-db-password
+      description: Sensitive generated PostgreSQL password shared with the Keycloak example app. Production inheritors should use secret("keycloak-db-password").
+    example-db-password:
+      type: string
+      value: <- random-uuid
+      description: Sensitive generated PostgreSQL password used only by this local component example.
+    postgres-volume-name:
+      type: string
+      value: keycloak-example-postgres
+      description: Monk volume subdirectory used for example PostgreSQL data.
+  containers:
+    postgres:
+      image: postgres
+      image-tag: <- $postgres-image-tag
+      restart: unless-stopped
+      paths:
+        - <- `${monk-volume-path}/${postgres-volume-name}:/var/lib/postgresql/data`
+  services:
+    postgres:
+      container: postgres
+      port: 5432
+      protocol: tcp
+      publish: false
+      description: Private PostgreSQL TCP endpoint consumed by the Keycloak example.
+  checks:
+    readiness:
+      code: <- `exec("postgres", "pg_isready", "-U", "${db_user}") contains?("accepting connections")`
+      period: 5
+      initialDelay: 5
+      attempts: 30
+
+example:
+  defines: runnable
+  inherits: keycloak/base
+  metadata:
+    name: Keycloak Component Example
+    description: |
+      Component example that inherits keycloak/base, wires a concrete private
+      PostgreSQL service through Monk connections, and publishes a non-privileged
+      local host port for external HTTP verification.
+    tags: keycloak, identity, postgresql, example, local
+    website: https://www.keycloak.org/
+    source: https://github.com/keycloak/keycloak
+    publisher: monk.io
+    icon: https://www.keycloak.org/resources/images/keycloak_logo_200px.svg
+    private: false
+  variables:
+    hostname:
+      type: string
+      env: KC_HOSTNAME
+      value: http://localhost:18081
+      description: Local URL used by the Keycloak component example.
+    db-name:
+      type: string
+      value: keycloak
+      description: PostgreSQL database name matching the example database service.
+    db-user:
+      type: string
+      env: KC_DB_USERNAME
+      value: keycloak
+      description: PostgreSQL user matching the example database service.
+    db-password:
+      type: string
+      env: KC_DB_PASSWORD
+      value: <- connection-target("postgres") entity get-member("db_pass")
+      description: Sensitive PostgreSQL password read from the connected example database runnable.
+    admin-user:
+      type: string
+      env: KC_BOOTSTRAP_ADMIN_USERNAME
+      value: admin
+      description: Bootstrap admin username for the local component example.
+    admin-password:
+      type: string
+      env: KC_BOOTSTRAP_ADMIN_PASSWORD
+      value: <- random-uuid
+      description: Sensitive generated bootstrap admin password used only by this local component example.
+    host-port:
+      type: int
+      value: 18081
+      description: Non-privileged host port published for local component example verification.
+  services:
+    http:
+      container: keycloak
+      port: <- $http-port
+      protocol: tcp
+      publish: true
+      host-port: <- $host-port
+      description: Published local Keycloak HTTP endpoint for component example verification.
+    management:
+      container: keycloak
+      port: <- $management-port
+      protocol: tcp
+      publish: false
+      description: Private Keycloak management endpoint for component example readiness checks.
+  connections:
+    postgres:
+      target: keycloak/example-postgres
+      service: postgres
+      description: Private PostgreSQL service connected to the Keycloak component example.
+  depends:
+    wait-for:
+      runnables:
+        - keycloak/example-postgres
+      timeout: 180
+  checks:
+    readiness:
+      code: http-get-service("keycloak/example", "management", "/health/ready") get-member("status") 200 equal?
+      period: 5
+      initialDelay: 20
+      attempts: 60
+
+example-group:
+  defines: group
+  metadata:
+    name: Keycloak Component Example Group
+    description: Demonstrates Keycloak as a reusable component by composing it with a private PostgreSQL backing service.
+    tags: keycloak, postgresql, component, example, local
+    website: https://www.keycloak.org/
+    source: https://github.com/keycloak/keycloak
+    publisher: monk.io
+    icon: https://www.keycloak.org/resources/images/keycloak_logo_200px.svg
+    private: false
+  members:
+    - keycloak/example-postgres
+    - keycloak/example
