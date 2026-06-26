@@ -1,0 +1,5 @@
+LOAD keycloak.yaml
+LOAD keycloak-example.yaml
+LOAD keycloak-stack.yaml
+
+ENTRY keycloak/stack-local
