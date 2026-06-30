@@ -33,17 +33,17 @@ stack-postgres:
       env: POSTGRES_PASSWORD
       value: <- $global-keycloak-db-password
       description: Sensitive PostgreSQL password supplied by the standalone stack. Production deployments read secret("keycloak-db-password").
-    postgres-volume-name:
-      type: string
-      value: keycloak-stack-postgres
-      description: Monk volume subdirectory used for standalone PostgreSQL data.
   containers:
     postgres:
       image: postgres
       image-tag: <- $postgres-image-tag
       restart: unless-stopped
-      paths:
-        - <- `${monk-volume-path}/${postgres-volume-name}:/var/lib/postgresql/data`
+      mounted-volumes:
+        postgres-data:
+          path: /var/lib/postgresql/data
+  volumes:
+    postgres-data:
+      kind: local
   services:
     postgres:
       container: postgres
@@ -191,10 +191,6 @@ stack-local-postgres:
       env: POSTGRES_PASSWORD
       value: <- $global-keycloak-db-password
       description: Sensitive generated PostgreSQL password shared with local Keycloak stack verification.
-    postgres-volume-name:
-      type: string
-      value: keycloak-stack-local-postgres
-      description: Monk volume subdirectory used for local stack PostgreSQL data.
 
 stack-local-app:
   defines: runnable

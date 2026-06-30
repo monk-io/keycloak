@@ -37,17 +37,17 @@ example-postgres:
       type: string
       value: <- random-uuid
       description: Sensitive generated PostgreSQL password used only by this local component example.
-    postgres-volume-name:
-      type: string
-      value: keycloak-example-postgres
-      description: Monk volume subdirectory used for example PostgreSQL data.
   containers:
     postgres:
       image: postgres
       image-tag: <- $postgres-image-tag
       restart: unless-stopped
-      paths:
-        - <- `${monk-volume-path}/${postgres-volume-name}:/var/lib/postgresql/data`
+      mounted-volumes:
+        postgres-data:
+          path: /var/lib/postgresql/data
+  volumes:
+    postgres-data:
+      kind: local
   services:
     postgres:
       container: postgres
