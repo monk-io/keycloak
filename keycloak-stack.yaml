@@ -229,6 +229,7 @@ stack-local-app:
       container: keycloak
       port: <- $http-port
       protocol: tcp
+      publish: true
       host-port: <- $host-port
       description: Published local Keycloak HTTP endpoint for standalone stack verification.
     management:
